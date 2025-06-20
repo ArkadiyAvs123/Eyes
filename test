@@ -1,0 +1,55 @@
+from mne.datasets import eegbci
+eegbci.load_data(subject=2, runs=[1])
+
+import numpy as np
+import joblib
+from mne.io import read_raw_edf
+from mne import Epochs, pick_types, find_events
+from scipy.signal import welch
+
+# Load trained model
+clf = joblib.load('rf_eeg_classifier.joblib')
+
+# Load new EEG data
+raw = read_raw_edf(
+    '/Users/arkadiy_123/mne_data/MNE-eegbci-data/files/eegmmidb/1.0.0/S002/S002R01.edf',  # ← change as needed
+    preload=True
+)
+raw.filter(7., 30., fir_design='firwin')  # Alpha/beta range
+
+# Pick EEG channels
+picks = pick_types(raw.info, eeg=True, exclude='bads')
+
+# Extract events
+events = find_events(raw, stim_channel='STI 014')
+
+# Create epochs: 1s chunks after each event
+epochs = Epochs(raw, events, event_id=None, tmin=0.0, tmax=1.0, picks=picks, baseline=None, preload=True)
+
+# Drop bad epochs
+epochs.drop_bad()
+
+# Get numpy data
+X_new = epochs.get_data()  # shape (n_epochs, n_channels, n_times)
+
+# Extract features (mean band power using Welch's method)
+sfreq = raw.info['sfreq']
+features_new = []
+
+for epoch in X_new:
+    psd_features = []
+    for ch_data in epoch:
+        freqs, psd = welch(ch_data, sfreq, nperseg=256)
+        psd_mean = np.mean(psd[(freqs >= 8) & (freqs <= 13)])  # Alpha band
+        psd_features.append(psd_mean)
+    features_new.append(psd_features)
+
+features_new = np.array(features_new)
+
+# Predict!
+predictions = clf.predict(features_new)
+
+# Display results
+print("Predicted labels:", predictions)
+print("Label 1 = Eyes Open, Label 2 = Eyes Closed")
+
